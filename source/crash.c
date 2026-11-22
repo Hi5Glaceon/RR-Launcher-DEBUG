@@ -25,9 +25,17 @@
 #include "util.h"
 #include "time.h"
 #include "settingsfile.h"
+#include "debuglog.h"
+#include "debugwrap.h"
 
 void rrc_crash_handle(void *xfb, struct rrc_settingsfile *settings)
 {
+    RRC_LOG_STEP("Previous game session crashed - showing crash info");
+    struct stat crash_st;
+    if (stat("/" RRC_RETRO_REWIND_BASE_DIR "/Crash.pul", &crash_st) == 0)
+        RRC_LOGI("crash dump /" RRC_RETRO_REWIND_BASE_DIR "/Crash.pul exists (%lld bytes)", (long long)crash_st.st_size);
+    else
+        RRC_LOGW("no /" RRC_RETRO_REWIND_BASE_DIR "/Crash.pul found");
     char *lines[] = {
         "- - - Retro Rewind crashed! - - -",
         "---------------------------------",

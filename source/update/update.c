@@ -39,6 +39,8 @@
 #include "../shutdown.h"
 #include "../versionutils.h"
 #include "../sd.h"
+#include "../debuglog.h"
+#include "../debugwrap.h"
 
 extern const unsigned char cacert_pem[];
 extern const unsigned char cacert_pem_end[];
@@ -78,8 +80,15 @@ struct rrc_result rrc_update_get_current_version(struct rrc_version *version)
     }
 
     int sz = statbuf.st_size;
+    RRC_LOGD("version file size: %d bytes", sz);
+    if (sz <= 0 || sz > 64)
+        RRC_LOGW("unexpected version.txt size %d bytes (expected something like \"6.1.2\")", sz);
     char verstring[sz + 1];
-    if (read(fd, (void *)verstring, sz) == 0)
+    memset(verstring, 0, sz + 1);
+    int read_res = read(fd, (void *)verstring, sz);
+    if (read_res < 0)
+        RRC_LOGE("read() of version.txt failed with %d - the original code only checks for 0 and will continue", read_res);
+    if (read_res == 0)
     {
         return rrc_result_create_error_errno(errno, "Failed to read version string from file");
     }
@@ -92,7 +101,11 @@ struct rrc_result rrc_update_get_current_version(struct rrc_version *version)
     /* add null termination */
     verstring[sz] = '\0';
 
-    return rrc_version_from_string(verstring, version);
+    RRC_LOG_HEX(RRC_LOG_DEBUG, "version.txt contents", verstring, sz);
+    struct rrc_result vr = rrc_version_from_string(verstring, version);
+    if (!rrc_result_is_error(vr))
+        RRC_LOGI("installed Retro Rewind version (version.txt): %d.%d.%d", version->major, version->minor, version->patch);
+    return vr;
 }
 
 struct rrc_result rrc_update_set_current_version(struct rrc_version *version)
@@ -104,6 +117,7 @@ struct rrc_result rrc_update_set_current_version(struct rrc_version *version)
     char out[32];
     int written = snprintf(out, sizeof(out), "%d.%d.%d", p1, p2, p3);
     RRC_ASSERT(written < sizeof(out), "version string too long");
+    RRC_LOGI("writing version %s to " RRC_VERSIONFILE, out);
     FILE *file = fopen(RRC_VERSIONFILE, "w");
     if (file == NULL)
     {
@@ -251,7 +265,10 @@ size_t _rrc_update_writefunction_empty(char *ptr, size_t size, size_t nmemb, voi
 CURLcode _rrc_update_get_zip_size(char *url, curl_off_t *size)
 {
     CURLcode cres;
+    RRC_LOGI("getting size of %s (HEAD request)", url);
     CURL *curl = curl_easy_init();
+    if (!curl)
+        RRC_LOGE("curl_easy_init() returned NULL");
     if (curl)
     {
         _rrc_curl_ssl_setup(curl);
@@ -266,6 +283,9 @@ CURLcode _rrc_update_get_zip_size(char *url, curl_off_t *size)
             return cres;
         }
         cres = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, size);
+        RRC_LOGI("size of %s: %lld bytes (getinfo %d)", url, (long long)*size, (int)cres);
+        if (*size < 0)
+            RRC_LOGW("server did not send a Content-Length (size -1)");
         curl_easy_cleanup(curl);
         return cres;
     }
@@ -279,6 +299,9 @@ struct rrc_result rrc_update_download_zip(char *url, char *filename, int current
     CURL *curl = curl_easy_init();
     FILE *fp;
     int numinfo = (current_zip * 100) + max_zips;
+    RRC_LOGI("downloading update %d/%d from %s to %s", current_zip + 1, max_zips, url, filename);
+    if (!curl)
+        RRC_LOGE("curl_easy_init() returned NULL");
     if (curl)
     {
         fp = fopen(filename, "wb");
@@ -315,6 +338,10 @@ struct rrc_result rrc_update_download_zip(char *url, char *filename, int current
         fclose(fp);
         curl_easy_cleanup(curl);
         _rrc_cleanup_measurement_state();
+
+        struct stat dl_st;
+        if (stat(filename, &dl_st) == 0)
+            RRC_LOGI("download finished, %s is %lld bytes", filename, (long long)dl_st.st_size);
 
         return rrc_result_success;
     }
@@ -360,13 +387,19 @@ static struct rrc_result mkdir_recursive(const char *fp)
 struct rrc_result rrc_update_extract_zip_archive()
 {
     int zip_err;
+    RRC_LOGI("opening update archive " _RRC_UPDATE_ZIP_NAME);
     struct zip *archive = zip_open(_RRC_UPDATE_ZIP_NAME, ZIP_CHECKCONS | ZIP_RDONLY, &zip_err);
     if (archive == NULL)
     {
+        zip_error_t ze;
+        zip_error_init_with_code(&ze, zip_err);
+        RRC_LOGE("zip_open failed: %d (%s) - corrupted or incomplete download? (an HTML error page instead of a ZIP?)", zip_err, zip_error_strerror(&ze));
+        zip_error_fini(&ze);
         return rrc_result_create_error_zip(zip_err, "Failed to open downloaded ZIP archive");
     }
 
     u32 zip_entries = zip_get_num_entries(archive, 0);
+    RRC_LOGI("archive has %u entries", (unsigned)zip_entries);
     // Find the total uncompressed size of the archive
     u64 uncompressed_zipsz = 0;
     for (int i = 0; i < zip_entries; i++)
@@ -377,6 +410,7 @@ struct rrc_result rrc_update_extract_zip_archive()
         int err = zip_stat_index(archive, i, 0, &stat);
         if (err != 0)
         {
+            RRC_LOGE("zip_stat_index(%d) failed: %s", i, zip_strerror(archive));
             return rrc_result_create_error_zip(err, "Failed to stat file in archive");
         }
 
@@ -388,6 +422,7 @@ struct rrc_result rrc_update_extract_zip_archive()
 
     unsigned long long sd_free;
     TRY(rrc_sd_get_free_space(&sd_free));
+    RRC_LOGI("uncompressed size %llu bytes, free on SD %llu bytes", (unsigned long long)uncompressed_zipsz, sd_free);
 
     if (uncompressed_zipsz > sd_free)
     {
@@ -405,6 +440,7 @@ struct rrc_result rrc_update_extract_zip_archive()
         int err = zip_stat_index(archive, i, 0, &stat);
         if (err != 0)
         {
+            RRC_LOGE("zip_stat_index(%d) failed: %s", i, zip_strerror(archive));
             return rrc_result_create_error_zip(err, "Failed to stat file in archive");
         }
 
@@ -437,8 +473,10 @@ struct rrc_result rrc_update_extract_zip_archive()
         zip_file_t *zip_file = zip_fopen_index(archive, i, ZIP_FL_ENC_UTF_8);
         if (!zip_file)
         {
+            RRC_LOGE("zip_fopen_index(%d, \"%s\") failed: %s", i, stat.name, zip_strerror(archive));
             return rrc_result_create_error_misc_update("Failed to open file in ZIP archive");
         }
+        RRC_LOGD("extracting [%d/%u] %s (%llu bytes)", i + 1, (unsigned)zip_entries, stat.name, (unsigned long long)stat.size);
 
         const char *filepath = stat.name;
 
@@ -478,6 +516,7 @@ struct rrc_result rrc_update_extract_zip_archive()
 
         if (read < 0)
         {
+            RRC_LOGE("zip_fread failed for %s: %s", filepath, zip_file_strerror(zip_file));
             return rrc_result_create_error_errno(errno, "Failed to write ZIP chunk");
         }
 
@@ -485,7 +524,8 @@ struct rrc_result rrc_update_extract_zip_archive()
         zip_fclose(zip_file);
     }
 
-    zip_close(archive);
+    int zc = zip_close(archive);
+    RRC_LOGI("extraction finished (zip_close = %d)", zc);
     return rrc_result_success;
 }
 
@@ -531,6 +571,9 @@ struct rrc_result rrc_update_do_updates_with_state(struct rrc_update_state *stat
         rrc_shutdown_check();
 
         char *url = state->update_urls[state->current_update_num];
+        struct rrc_version *uv = &state->update_versions[state->current_update_num];
+        RRC_LOG_STEP("Applying update %d of %d: version %d.%d.%d from %s", state->current_update_num + 1, state->num_updates,
+                     uv->major, uv->minor, uv->patch, url);
 
         curl_off_t zipsz;
         CURLcode szres = _rrc_update_get_zip_size(url, &zipsz);
@@ -573,6 +616,7 @@ struct rrc_result rrc_update_do_updates_with_state(struct rrc_update_state *stat
             if (rrc_version_equals(&file->version, &state->update_versions[state->current_update_num]))
             {
                 char out[100];
+                RRC_LOGI("removing file deleted in this version: \"%s\"", file->path);
                 snprintf(out, 100, "Removing deleted file %s\n", file->path);
                 rrc_con_update(out, 100);
                 int rmres = remove(file->path);
@@ -597,9 +641,13 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
     rrc_con_clear(true);
 
     rrc_con_update("Prepare Network", 0);
+    RRC_LOG_STEP("Update: initialise network (wiisocket_init)");
     int res = wiisocket_init();
+    RRC_LOGI("wiisocket_init() = %d", res);
     if (res < 0)
     {
+        const char *meaning = res == -1 ? "init already in progress" : res == -2 ? "library init failed" : res == -3 ? "network init failed (no connection / wrong internet settings)" : res == -4 ? "devoptab registration failed" : "unknown";
+        RRC_LOGE("wiisocket_init failed: %d (%s)", res, meaning);
         return rrc_result_create_error_misc_update("Failed to connect to the internet. Please check your connection and internet settings.");
     }
 
@@ -617,6 +665,9 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
     {
         return rrc_result_create_error_curl(-res, "Failed to get version information.");
     }
+    RRC_LOGI("versions file: %u bytes", versionsfile ? (unsigned)strlen(versionsfile) : 0);
+    if (versionsfile)
+        rrc_log_text_block(RRC_LOG_DEBUG, __FILE__, __LINE__, __func__, "versions> ", versionsfile, strlen(versionsfile), 4096);
 
     struct rrc_version current = {-1, -1, -1};
     TRY(rrc_update_get_current_version(&current));
@@ -626,17 +677,22 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
 
     rrc_con_update("Get Download URLs", 20);
     TRY(rrc_versionsfile_get_necessary_urls_and_versions(versionsfile, &current, count, &zip_urls, &update_versions));
+    RRC_LOGI("%d update(s) needed", *count);
+    for (int i = 0; i < *count; i++)
+        RRC_LOGI("  update %d: %d.%d.%d <- %s", i + 1, update_versions[i].major, update_versions[i].minor, update_versions[i].patch, zip_urls[i]);
 
     if (*count > 0)
     {
         char *lines[] = {"An update is available."};
 
         enum rrc_prompt_result result = rrc_prompt_2_options(xfb, lines, 1, "Update", "Skip", RRC_PROMPT_RESULT_YES, RRC_PROMPT_RESULT_NO);
+        RRC_LOGI("update prompt: user chose %s", result == RRC_PROMPT_RESULT_YES ? "Update" : result == RRC_PROMPT_RESULT_NO ? "Skip" : "ERROR");
         if (result == RRC_PROMPT_RESULT_NO)
         {
             return rrc_result_success;
         }
     } else {
+        RRC_LOGI("Retro Rewind is up to date");
         return rrc_result_success;
     }
 
@@ -647,7 +703,9 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
         return rrc_result_create_error_curl(-res, "Failed to get files to remove.");
     }
 
+    RRC_LOGI("deleted-files list: %u bytes", deleted_versionsfile ? (unsigned)strlen(deleted_versionsfile) : 0);
     TRY(rrc_versionsfile_parse_deleted_files(deleted_versionsfile, &current, &deleted_files, &num_deleted_files));
+    RRC_LOGI("%d file(s) will be deleted by the updates", num_deleted_files);
 
     rrc_dbg_printf("%i updates\n", *count);
     struct rrc_update_state state =
@@ -664,6 +722,9 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
     rrc_con_update("Check Update Size", 40);
     curl_off_t updates_size;
     int is_large = rrc_update_is_large(&state, &updates_size);
+    RRC_LOGI("rrc_update_is_large() = %d, total size %lld bytes", is_large, (long long)updates_size);
+    if (is_large < 0)
+        RRC_LOGE("getting the update size failed with CURLcode %d (%s)", -is_large, curl_easy_strerror((CURLcode)-is_large));
     RRC_ASSERT(is_large >= 0, "failed to get update size");
 
     if (is_large == 1)
@@ -681,6 +742,7 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
             "Would you like to continue?"};
 
         enum rrc_prompt_result result = rrc_prompt_yes_no(xfb, lines, 6);
+        RRC_LOGI("large update prompt result: %d", result);
         RRC_ASSERT(result != RRC_PROMPT_RESULT_ERROR, "failed to generate prompt");
         if (result == RRC_PROMPT_RESULT_NO)
         {
@@ -691,6 +753,7 @@ struct rrc_result rrc_update_do_updates(void *xfb, int *count, bool *updates_ins
     TRY(rrc_update_do_updates_with_state(&state));
 
     *updates_installed = true;
+    RRC_LOG_STEP("All updates installed");
 
     return rrc_result_success;
 }

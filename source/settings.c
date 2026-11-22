@@ -33,6 +33,8 @@
 #include <mxml.h>
 #include <gccore.h>
 #include "pad.h"
+#include "debuglog.h"
+#include "debugwrap.h"
 
 enum settings_entry_type
 {
@@ -130,9 +132,13 @@ static struct rrc_result xml_find_option_choices(mxml_node_t *node, mxml_node_t 
     *result_choice = out;
     *result_choice_count = i;
 
+    for (int c = 0; c < *result_choice_count; c++)
+        RRC_LOGD("  option '%s' choice %d: %s", name, c, out[c]);
+
     // Clamp it in case the saved version is out of bounds.
     if (*saved_value < 0 || *saved_value >= *result_choice_count)
     {
+        RRC_LOGW("saved value %u for option '%s' is out of range (0..%d) - reset to default", (unsigned)*saved_value, name, *result_choice_count - 1);
         *saved_value = RRC_SETTINGSFILE_DEFAULT;
     }
 
@@ -166,7 +172,10 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
         *result = rrc_result_create_error_errno(errno, "Failed to open " RRC_RIIVO_XML_PATH);
         return RRC_SETTINGS_ERROR;
     }
+    RRC_LOG_STEP("Settings menu: parsing " RRC_RIIVO_XML_PATH);
     mxml_node_t *xml_top = mxmlLoadFile(NULL, xml_file, NULL);
+    if (!xml_top)
+        RRC_LOGE("mxmlLoadFile(" RRC_RIIVO_XML_PATH ") returned NULL - XML is corrupted/empty/unreadable (see mxml errors above)");
 
     mxml_node_t *xml_options = mxmlFindElement(xml_top, xml_top, "options", NULL, NULL, MXML_DESCEND);
     RRC_ASSERT(xml_options != NULL, "no <options> tag in xml");
@@ -177,14 +186,18 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
     int autoupdate_option_count = sizeof(autoupdate_options) / sizeof(char *);
 
     struct rrc_result r;
+    u32 my_stuff_before = stored_settings->my_stuff;
     r = xml_find_option_choices(xml_options, xml_top, "My Stuff", &my_stuff_options, &my_stuff_options_count, &stored_settings->my_stuff);
+    RRC_LOGI("XML option 'My Stuff': %d choices (saved value %u -> %u)", my_stuff_options_count, (unsigned)my_stuff_before, (unsigned)stored_settings->my_stuff);
     if (rrc_result_is_error(r))
     {
         *result = r;
         return RRC_SETTINGS_ERROR;
     }
 
+    u32 savegame_before = stored_settings->separate_savegame;
     r = xml_find_option_choices(xml_options, xml_top, "Seperate Savegame", &savegame_options, &savegame_options_count, &stored_settings->separate_savegame);
+    RRC_LOGI("XML option 'Seperate Savegame': %d choices (saved value %u -> %u)", savegame_options_count, (unsigned)savegame_before, (unsigned)stored_settings->separate_savegame);
     if (rrc_result_is_error(r))
     {
         *result = r;
@@ -338,6 +351,8 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
         rrc_con_cursor_seek_to(rrc_con_get_rows() - 2, strlen(cursor_icon));
         printf("Use the D-Pad to navigate.");
 
+        rrc_con_display_debug_badge(); /* DEBUG BUILD: keep the live counters on this screen too */
+
         // use an inner loop just for scanning for button presses, rather than re-printing everything all the time
         // because the current scene will remain "static" until a button is pressed
         while (1)
@@ -346,6 +361,7 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
 
             if (rrc_pad_home_pressed(pad))
             {
+                RRC_LOGI("settings menu: HOME pressed");
                 goto exit;
             }
             else if (rrc_pad_down_pressed(pad))
@@ -386,6 +402,7 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
                     // user pressed left while already at the last option, wrap back to the end
                     *entry->selected_option = entry->option_count - 1;
                 }
+                RRC_LOGI("settings menu: \"%s\" -> %s", entry->label, entry->options[*entry->selected_option]);
                 break;
             }
 
@@ -398,11 +415,13 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
                     // user pressed right while already at the last option, wrap back to the first one
                     *entry->selected_option = 0;
                 }
+                RRC_LOGI("settings menu: \"%s\" -> %s", entry->label, entry->options[*entry->selected_option]);
                 break;
             }
 
             if (rrc_pad_a_pressed(pad))
             {
+                RRC_LOGI("settings menu: A on \"%s\"", entry->label);
                 if (entry->label == launch_label)
                 {
                     if (has_unsaved_changes && prompt_save_unsaved_changes(xfb, entries, entry_count))
@@ -442,7 +461,10 @@ enum rrc_settings_result rrc_settings_display(void *xfb, struct rrc_settingsfile
                 {
                     int update_count;
                     bool updated;
+                    RRC_LOG_STEP("Manual update (from the settings menu)");
                     struct rrc_result update_res = rrc_update_do_updates(xfb, &update_count, &updated);
+                    RRC_LOGI("manual update finished: %s, %d updates, installed: %s",
+                             rrc_result_is_error(update_res) ? "ERROR" : "ok", update_count, updated ? "yes" : "no");
 
                     if (rrc_result_is_error(update_res))
                     {

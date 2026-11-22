@@ -44,11 +44,12 @@
 #include "gui.h"
 #include "pngu/pngu.h"
 #include "util.h"
+#include "debugwrap.h"
 
 #define _RRC_GUI_CON_START_X_4_3 70
 #define _RRC_GUI_CON_START_Y_4_3 114
-#define _RRC_GUI_CON_WIDTH_4_3 502
-#define _RRC_GUI_CON_HEIGHT_4_3 300
+#define _RRC_GUI_CON_WIDTH_4_3 572 /* DEBUG BUILD: was 502. libogc 3.x takes WIDTH/HEIGHT as the right/bottom EDGE, older libogc as the size. Console is (572-70)/8 = 62 columns x (414-114)/16 = 18 rows, as the original design intends. */
+#define _RRC_GUI_CON_HEIGHT_4_3 414 /* DEBUG BUILD: was 300, see above */
 
 void rrc_gui_xfb_alloc(void **xfb, bool sys_stdio_report)
 {

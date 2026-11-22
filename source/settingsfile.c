@@ -44,6 +44,7 @@
 #include <dir.h>
 #include "settingsfile.h"
 #include "util.h"
+#include "debugwrap.h"
 
 #define RRC_SETTINGSFILE_PATH "/" RRC_RETRO_REWIND_BASE_DIR "/.settings"
 #define RRC_SETTINGSFILE_MY_STUFF_KEY "My Stuff"
@@ -89,13 +90,19 @@ static struct rrc_result rrc_settingsfile_write_header(FILE *file, u32 entry_cou
 
 struct rrc_result rrc_settingsfile_create()
 {
+    RRC_LOGI("creating a new (empty) settings file " RRC_SETTINGSFILE_PATH);
     FILE *file = fopen(RRC_SETTINGSFILE_PATH, "w");
     if (!file)
     {
         return rrc_result_create_error_errno(errno, "could not create settingsfile, maybe the sd card is locked?");
     }
 
-    rrc_settingsfile_write_header(file, 0);
+    struct rrc_result hres = rrc_settingsfile_write_header(file, 0);
+    if (rrc_result_is_error(hres))
+    {
+        RRC_LOGE("writing the settings header failed (the original code ignores this)");
+        rrc_result_free(hres);
+    }
     fclose(file);
 
     return rrc_result_success;
@@ -116,6 +123,7 @@ struct rrc_result rrc_settingsfile_parse(struct rrc_settingsfile *settings)
     FILE *file = fopen(RRC_SETTINGSFILE_PATH, "r");
     if (!file && errno == ENOENT)
     {
+        RRC_LOGI("settings file does not exist yet - creating it with defaults");
         // File doesn't exist. Create it and initialize it with default values.
         TRY(rrc_settingsfile_create());
 
@@ -133,6 +141,7 @@ struct rrc_result rrc_settingsfile_parse(struct rrc_settingsfile *settings)
     TRY(expect_read_u32(file, &magic, "Failed to read magic bytes"));
     if (magic != RRC_SETTINGSFILE_MAGIC)
     {
+        RRC_LOGE("settings magic is 0x%08x, expected 0x%08x", (unsigned)magic, (unsigned)RRC_SETTINGSFILE_MAGIC);
         return rrc_result_create_error_corrupted_settingsfile("Magic header mismatch");
     }
     u32 version;
@@ -140,6 +149,9 @@ struct rrc_result rrc_settingsfile_parse(struct rrc_settingsfile *settings)
 
     u32 entry_count;
     TRY(expect_read_u32(file, &entry_count, "Failed to read entry count"));
+    RRC_LOGI("settings file: version %u, %u entries", (unsigned)version, (unsigned)entry_count);
+    if (entry_count > 32)
+        RRC_LOGW("suspiciously many settings entries (%u)", (unsigned)entry_count);
 
     for (int i = 0; i < entry_count; i++)
     {
@@ -177,6 +189,8 @@ struct rrc_result rrc_settingsfile_parse(struct rrc_settingsfile *settings)
         {
             return rrc_result_create_error_corrupted_settingsfile("Failed to fully read u32 value");
         }
+
+        RRC_LOGD("settings entry %d: \"%s\" = %u", i, key, (unsigned)value);
 
         if (strcmp(key, RRC_SETTINGSFILE_MY_STUFF_KEY) == 0)
         {
@@ -228,13 +242,20 @@ struct rrc_result rrc_settingsfile_set_option(FILE *file, const char *key, u32 v
  */
 struct rrc_result rrc_settingsfile_store(struct rrc_settingsfile *settings)
 {
+    RRC_LOGI("saving settings: my_stuff=%u separate_savegame=%u auto_update=%u",
+             (unsigned)settings->my_stuff, (unsigned)settings->separate_savegame, (unsigned)settings->auto_update);
     FILE *file = fopen(RRC_SETTINGSFILE_PATH, "w");
     if (file == NULL)
     {
         return rrc_result_create_error_errno(errno, "Failed to open settingsfile");
     }
 
-    rrc_settingsfile_write_header(file, 3);
+    struct rrc_result hres = rrc_settingsfile_write_header(file, 3);
+    if (rrc_result_is_error(hres))
+    {
+        RRC_LOGE("writing the settings header failed (the original code ignores this)");
+        rrc_result_free(hres);
+    }
 
     TRY(rrc_settingsfile_set_option(file, RRC_SETTINGSFILE_MY_STUFF_KEY, settings->my_stuff));
     TRY(rrc_settingsfile_set_option(file, RRC_SETTINGSFILE_SAVEGAME_KEY, settings->separate_savegame));

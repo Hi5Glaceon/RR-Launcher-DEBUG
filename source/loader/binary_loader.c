@@ -22,6 +22,8 @@
 #include "../util.h"
 #include "loader.h"
 #include "binary_loader.h"
+#include "../debuglog.h"
+#include "../debugwrap.h"
 
 bool rrc_binary_find_section_by_addr(struct rrc_dol *dol, u32 addr, void **virt_addr, u32 *section_index)
 {
@@ -48,6 +50,7 @@ struct rrc_result rrc_binary_load_pulsar_loader(struct rrc_dol *dol, void *real_
     }
 
     void *original_addr = virt_loader_addr;
+    RRC_LOGI("loading " RRC_LOADER_PUL_PATH " to game address %p (staging copy at %p)", real_loader_addr, virt_loader_addr);
 
     FILE *loader_pul_file = fopen(RRC_LOADER_PUL_PATH, "r");
     if (!loader_pul_file)
@@ -61,6 +64,11 @@ struct rrc_result rrc_binary_load_pulsar_loader(struct rrc_dol *dol, void *real_
         virt_loader_addr += read;
     }
     rrc_invalidate_cache(original_addr, (u32)virt_loader_addr - (u32)original_addr);
+    RRC_LOGI("Loader.pul: %u bytes loaded", (unsigned)((u32)virt_loader_addr - (u32)original_addr));
+    if (ferror(loader_pul_file))
+        RRC_LOGE("Loader.pul: read error while loading (ferror set) - the original code does not check this");
+    if ((u32)virt_loader_addr == (u32)original_addr)
+        RRC_LOGE("Loader.pul is EMPTY (0 bytes read)");
 
     fclose(loader_pul_file);
     return rrc_result_success;
@@ -92,6 +100,7 @@ void rrc_binary_load_runtime_ext(char region)
 {
     char runtime_ext_path[64];
     get_runtime_ext_path(region, runtime_ext_path);
+    RRC_LOGI("loading runtime-ext for region '%c': %s", region, runtime_ext_path);
 
     FILE *patch_file = fopen(runtime_ext_path, "r");
     if (!patch_file)
@@ -113,6 +122,7 @@ void rrc_binary_load_runtime_ext(char region)
         rrc_result_error_check_error_fatal(res);
     }
 
+    RRC_LOGI("runtime-ext DOL: entry %x, bss %x (+%x)", (unsigned)patch_dol.entry_point, (unsigned)patch_dol.bss_addr, (unsigned)patch_dol.bss_size);
     ensure_section_inbounds(patch_dol.bss_addr, patch_dol.bss_size);
     memset((void *)patch_dol.bss_addr, 0, patch_dol.bss_size);
     rrc_invalidate_cache((void *)patch_dol.bss_addr, patch_dol.bss_size);
@@ -125,6 +135,7 @@ void rrc_binary_load_runtime_ext(char region)
         if (sec_addr == 0)
             continue;
 
+        RRC_LOGD("runtime-ext section %d: file offset %x -> %x, %u bytes", i, (unsigned)sec, (unsigned)sec_addr, (unsigned)sec_size);
         ensure_section_inbounds(sec_addr, sec_size);
 
         if (fseek(patch_file, sec, SEEK_SET) != 0)

@@ -20,6 +20,7 @@
 #include "vec.h"
 #include "util.h"
 #include <string.h>
+#include "debugwrap.h"
 
 #define _RRC_VEC_BOUNDS_CHECK(vec, index) \
     RRC_ASSERT(index >= 0 && index < vec->len, "vec index out of bounds")

@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <string.h>
 #include <curl/curl.h>
+#include "debuglog.h"
 
 /* The amount of time in seconds to display fatal errors before exiting */
 #define RRC_RESULT_FATAL_SPLASH_TIME_SEC 20
@@ -69,6 +70,14 @@ struct rrc_result_error
     enum rrc_result_error_source source;
     /* additional source data of the error, activate member indicated by `source` enum */
     union rrc_result_error_inner inner;
+    /* DEBUG BUILD: where in the code this error was created */
+    const char *site_file;
+    int site_line;
+    const char *site_func;
+    /* DEBUG BUILD: one line diagnosis of the file operation that caused this error (points into this allocation), or NULL */
+    const char *diag;
+    /* DEBUG BUILD: whether the error was shown to the user */
+    bool reported;
     /* dynamically sized string containing some extra context */
     char context[];
 };
@@ -108,33 +117,45 @@ struct rrc_result
     struct rrc_result_error *err;
 };
 
-#define TRY(x)                        \
-    do                                \
-    {                                 \
-        struct rrc_result res = x;    \
-        if (rrc_result_is_error(res)) \
-            return res;               \
+/* DEBUG BUILD: TRY additionally logs every place an error is propagated through. */
+#define TRY(x)                                                                                    \
+    do                                                                                            \
+    {                                                                                             \
+        struct rrc_result res = x;                                                                \
+        if (rrc_result_is_error(res))                                                             \
+        {                                                                                         \
+            rrc_log_write(RRC_LOG_DEBUG, __FILE__, __LINE__, __func__,                            \
+                          "TRY: propagating error \"%s\" from %s", rrc_result_context(res), #x);   \
+            return res;                                                                           \
+        }                                                                                         \
     } while (0);
 
 extern const struct rrc_result rrc_result_success;
 
-struct rrc_result rrc_result_create_error_curl(CURLcode error, const char *context);
+/* DEBUG BUILD: every error result records (and logs) the source location where it was created.
+   The public names are macros that pass __FILE__/__LINE__/__func__ to the _at variants. */
+#define RRC_RESULT_SITE_PARAMS const char *site_file, int site_line, const char *site_func
+#define _RRC_RESULT_SITE __FILE__, __LINE__, __func__
 
-struct rrc_result rrc_result_create_error_errno(int eno, const char *context);
+struct rrc_result rrc_result_create_error_curl_at(CURLcode error, const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_errno_at(int eno, const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_sdcard_at(int eno, const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_zip_at(int error, const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_corrupted_settingsfile_at(const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_corrupted_versionfile_at(const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_misc_update_at(const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_corrupted_rr_xml_at(const char *context, RRC_RESULT_SITE_PARAMS);
+struct rrc_result rrc_result_create_error_version_mismatch_at(const char *context, RRC_RESULT_SITE_PARAMS);
 
-struct rrc_result rrc_result_create_error_sdcard(int eno, const char *context);
-
-struct rrc_result rrc_result_create_error_zip(int error, const char *context);
-
-struct rrc_result rrc_result_create_error_corrupted_settingsfile(const char *context);
-
-struct rrc_result rrc_result_create_error_corrupted_versionfile(const char *context);
-
-struct rrc_result rrc_result_create_error_misc_update(const char *context);
-
-struct rrc_result rrc_result_create_error_corrupted_rr_xml(const char *context);
-
-struct rrc_result rrc_result_create_error_version_mismatch(const char *context);
+#define rrc_result_create_error_curl(error, context) rrc_result_create_error_curl_at((error), (context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_errno(eno, context) rrc_result_create_error_errno_at((eno), (context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_sdcard(eno, context) rrc_result_create_error_sdcard_at((eno), (context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_zip(error, context) rrc_result_create_error_zip_at((error), (context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_corrupted_settingsfile(context) rrc_result_create_error_corrupted_settingsfile_at((context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_corrupted_versionfile(context) rrc_result_create_error_corrupted_versionfile_at((context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_misc_update(context) rrc_result_create_error_misc_update_at((context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_corrupted_rr_xml(context) rrc_result_create_error_corrupted_rr_xml_at((context), _RRC_RESULT_SITE)
+#define rrc_result_create_error_version_mismatch(context) rrc_result_create_error_version_mismatch_at((context), _RRC_RESULT_SITE)
 
 /* Returns true if this result is an error, false otherwise. */
 inline bool rrc_result_is_error(struct rrc_result result)
@@ -181,5 +202,8 @@ void rrc_result_error_check_error_fatal(struct rrc_result result);
  * `rrc_result_error_*` functions also implicitly free the result and you must not free it again).
  */
 void rrc_result_free(struct rrc_result result);
+
+/* DEBUG BUILD: writes a precise description of the inner error code (e.g. "EIO (5)", "CURLcode 28") into `out'. */
+void rrc_result_describe_code(struct rrc_result result, char *out, int out_sz);
 
 #endif

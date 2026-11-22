@@ -31,6 +31,12 @@
 #include "../vec.h"
 
 #include <ogc/system.h>
+#include "../debuglog.h"
+#include "../debugwrap.h"
+
+/* DEBUG BUILD statistics */
+static int dbg_missing_files = 0;
+static int dbg_folder_files = 0;
 
 static char *bump_alloc_string(u32 *arena, const char *src)
 {
@@ -82,8 +88,10 @@ static struct rrc_result rrc_patch_loader_append_patches_for_option(
 
             if (!selected_choice)
             {
+                RRC_LOGE("option '%s' has no choice #%d in the XML", name, value);
                 return rrc_result_create_error_corrupted_rr_xml("choice option has no children");
             }
+            RRC_LOGI("option '%s' = %d -> choice \"%s\"", name, value, mxmlElementGetAttr(selected_choice, "name") ? mxmlElementGetAttr(selected_choice, "name") : "?");
 
             // The children of `selected_choice` are the patches. Append them.
             for (mxml_node_t *patch = mxmlFindElement(selected_choice, top, "patch", NULL, NULL, MXML_DESCEND_FIRST); patch != NULL; patch = mxmlGetNextSibling(patch))
@@ -107,12 +115,14 @@ static struct rrc_result rrc_patch_loader_append_patches_for_option(
                 }
                 patch_list[*patch_count] = patch_name;
                 (*patch_count)++;
+                RRC_LOGI("  enabling patch id \"%s\"", patch_name);
             }
 
             return rrc_result_success;
         }
     }
 
+    RRC_LOGE("option '%s' not found in the XML", name);
     return rrc_result_create_error_corrupted_rr_xml("option not found in xml");
 }
 
@@ -149,6 +159,7 @@ _rrc_riivo_handle_file_patch(struct vec *sd_files,
 {
     if (strcmp(disc_path, "main.dol") == 0)
     {
+        RRC_LOGI("main.dol replacement found: %s", external_path);
         *main_dol_path = strdup(external_path);
         // No need to actually register main.dol as a real replacement, it's handled specially via the `main_dol_path` pointer.
         return;
@@ -184,6 +195,8 @@ _rrc_riivo_handle_file_patch(struct vec *sd_files,
             else
             {
                 // File doesn't exist on the SD card.
+                dbg_missing_files++;
+                RRC_LOGD("<file> patch: \"%s\" (disc \"%s\") does not exist on the SD card - skipped (normal for optional files)", external_path, disc_path);
                 return;
             }
         }
@@ -277,8 +290,10 @@ static struct rrc_result _rrc_riivo_handle_folder_patch(struct vec *sd_files,
     DIR *dir = opendir(external_path);
     if (!dir)
     {
+        RRC_LOGW("<folder> patch: cannot open \"%s\" (disc \"%s\") - the caller ignores this error", external_path, disc_path);
         return rrc_result_create_error_errno(errno, "Failed to open folder");
     }
+    int folder_files_before = dbg_folder_files;
 
     int disc_path_len = strlen(disc_path);
     int external_path_len = strlen(external_path);
@@ -301,6 +316,7 @@ static struct rrc_result _rrc_riivo_handle_folder_patch(struct vec *sd_files,
 
         if (entry->d_type == DT_REG)
         {
+            dbg_folder_files++;
             _rrc_riivo_handle_file_patch(sd_files, replacements, filename_replacements, mem1, main_dol_path, cur_disc_path, cur_external_path, false);
         }
         else if (recursive && entry->d_type == DT_DIR)
@@ -320,6 +336,7 @@ static struct rrc_result _rrc_riivo_handle_folder_patch(struct vec *sd_files,
     }
 
     closedir(dir);
+    RRC_LOGD("<folder> \"%s\" -> \"%s\": %d files%s", external_path, disc_path, dbg_folder_files - folder_files_before, recursive ? " (recursive)" : "");
     return rrc_result_success;
 }
 
@@ -339,6 +356,7 @@ static struct rrc_result rrc_replace_main_dol(struct rrc_dol *dol, const char *m
     {
         dol_ptr += read;
     }
+    RRC_LOGI("main.dol replacement: read %u bytes from %s into %p", (unsigned)(dol_ptr - (char *)dol), main_dol_replacement_path, (void *)dol);
 
     if (ferror(main_dol))
     {
@@ -369,6 +387,11 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
         return rrc_result_create_error_corrupted_rr_xml("missing " attr " attribute on " #node " replacement"); \
     }
 
+    RRC_LOG_STEP("Parsing Riivolution patches from " RRC_RIIVO_XML_PATH);
+    RRC_LOGI("mem1 hi at start: %x, mem2 hi: %x, my_stuff=%u", (unsigned)*mem1, (unsigned)*mem2, (unsigned)settings->my_stuff);
+    u32 dbg_mem1_start = *mem1;
+    dbg_missing_files = 0;
+    dbg_folder_files = 0;
     out->loader_pul_dest = NULL;
     *mem1 -= sizeof(struct rrc_riivo_memory_patch) * MAX_MEMORY_PATCHES;
     out->mem_patches = (void *)*mem1;
@@ -383,6 +406,10 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
     }
 
     mxml_node_t *xml_top = mxmlLoadFile(NULL, xml_file, NULL);
+    if (!xml_top)
+        RRC_LOGE("mxmlLoadFile(" RRC_RIIVO_XML_PATH ") returned NULL - XML is corrupted/empty/unreadable (see mxml errors above). No patches will be applied!");
+    else
+        RRC_LOGI("XML loaded");
 
     const char *active_patches[MAX_ENABLED_SETTINGS];
     int active_patches_count = 0;
@@ -428,7 +455,13 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
             }
         }
         if (!enabled)
+        {
+            RRC_LOGD("<patch id=\"%s\"> not enabled", elem_id ? elem_id : "<no id>");
             continue;
+        }
+        RRC_LOGI("processing <patch id=\"%s\">", elem_id);
+        int dbg_repl_before = replacements.len + filename_replacements.len;
+        int dbg_mem_before = out->mem_patches_count;
 
         mxml_index_t *file_repl_index = mxmlIndexNew(cur, "file", NULL);
         for (mxml_node_t *file = mxmlIndexEnum(file_repl_index); file != NULL; file = mxmlIndexEnum(file_repl_index))
@@ -461,7 +494,13 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
             const char *recursive_mxml = mxmlElementGetAttr(folder, "recursive");
             bool recursive = recursive_mxml == NULL || strcmp(recursive_mxml, "true") == 0;
 
-            _rrc_riivo_handle_folder_patch(&sd_files, &replacements, &filename_replacements, mem1, &main_dol_path, disc_path_mxml, external_path_mxml, recursive);
+            struct rrc_result folder_res = _rrc_riivo_handle_folder_patch(&sd_files, &replacements, &filename_replacements, mem1, &main_dol_path, disc_path_mxml, external_path_mxml, recursive);
+            if (rrc_result_is_error(folder_res))
+            {
+                RRC_LOGW("<folder external=\"%s\"> failed: %s (ignored, as in the release build)", external_path_mxml, rrc_result_context(folder_res));
+                folder_res.err->reported = true;
+                rrc_result_free(folder_res);
+            }
         }
         mxmlIndexDelete(folder_repl_index);
 
@@ -481,6 +520,7 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
                     // Loader.pul specifically is handled manually elsewhere, so make an exception for this.
                     u32 loader_addr = strtoul(addr_mxml, NULL, 16);
                     out->loader_pul_dest = (void *)loader_addr;
+                    RRC_LOGI("Loader.pul destination: %x", (unsigned)loader_addr);
                     continue;
                 }
 
@@ -493,6 +533,8 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
             PARSE_REQUIRED_ATTR(memory, value_mxml, "value");
             const char *original_mxml = mxmlElementGetAttr(memory, "original");
 
+            if (out->mem_patches_count >= MAX_MEMORY_PATCHES)
+                RRC_LOGE("BUG: more than %d memory patches - writing past the reserved area", MAX_MEMORY_PATCHES);
             struct rrc_riivo_memory_patch *patch_dist = &out->mem_patches[out->mem_patches_count];
             out->mem_patches_count++;
             patch_dist->addr = strtoul(addr_mxml, NULL, 16);
@@ -505,13 +547,28 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
             }
         }
         mxmlIndexDelete(memory_index);
+        RRC_LOGI("  -> %d file replacements, %d memory patches from this patch",
+                 (replacements.len + filename_replacements.len) - dbg_repl_before, out->mem_patches_count - dbg_mem_before);
     }
 
     if (main_dol_path != NULL)
     {
-        rrc_replace_main_dol(dol, main_dol_path);
+        struct rrc_result mdr = rrc_replace_main_dol(dol, main_dol_path);
+        if (rrc_result_is_error(mdr))
+        {
+            RRC_LOGE("main.dol replacement failed: %s (ignored, as in the release build)", rrc_result_context(mdr));
+            mdr.err->reported = true;
+            rrc_result_free(mdr);
+        }
         free(main_dol_path);
     }
+
+    RRC_LOGI("patch summary: %d SD files, %d full-path replacements, %d filename replacements, %d memory patches, "
+             "%d files from folders, %d missing <file> targets, Loader.pul dest %p",
+             sd_files.len, replacements.len, filename_replacements.len, out->mem_patches_count,
+             dbg_folder_files, dbg_missing_files, out->loader_pul_dest);
+    if (out->loader_pul_dest == NULL)
+        RRC_LOGW("no Loader.pul memory patch found in the XML - loading Loader.pul will fail");
 
     int total_replacements = replacements.len + filename_replacements.len;
     if (total_replacements > GLOBAL_MAX_FOLDER_FILES)
@@ -541,6 +598,9 @@ struct rrc_result rrc_riivo_patch_loader_parse(struct rrc_settingsfile *settings
     riivo_disc->replacements_count = replacements.len;
     riivo_disc->filename_replacements = mem1_filename_replacements;
     riivo_disc->filename_replacements_count = filename_replacements.len;
+
+    RRC_LOGI("MEM1 used for patch data: %u bytes (%x -> %x), runtime-ext area starts at %x",
+             (unsigned)(dbg_mem1_start - *mem1), (unsigned)dbg_mem1_start, (unsigned)*mem1, (unsigned)RRC_RUNTIME_EXT_DOL_SAFE_START);
 
     mxmlDelete(xml_top);
     fclose(xml_file);

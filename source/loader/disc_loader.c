@@ -24,6 +24,8 @@
 #include "../di.h"
 #include "disc_loader.h"
 #include "../util.h"
+#include "../debuglog.h"
+#include "../debugwrap.h"
 
 int rrc_disc_loader_locate_data_part(u32 *data_part_offset)
 {
@@ -51,6 +53,7 @@ int rrc_disc_loader_locate_data_part(u32 *data_part_offset)
         RRC_ASSERTEQ(res, RRC_DI_LIBDI_OK, "rrc_di_unencrypted_read for partition");
         for (u32 j = 0; j < part_groups[i].count; j++)
         {
+            RRC_LOGD("group %u partition %u: offset 0x%x type %u", (unsigned)i, (unsigned)j, (unsigned)(partitions[j].offset << 2), (unsigned)partitions[j].type);
             if (partitions[j].type == RRC_DI_PART_TYPE_DATA)
             {
                 *data_part_offset = partitions[j].offset;
@@ -69,6 +72,7 @@ int rrc_disc_loader_await_mkw(void *xfb, char *region)
 
 check_cover_register:
     res = rrc_di_get_low_cover_register(&status);
+    RRC_LOGI("DVD cover register: ioctl result %d, status 0x%x (%s)", res, status, (status & RRC_DI_DICVR_CVR) ? "NO disc / cover open" : "disc inserted");
     RRC_ASSERTEQ(res, RRC_DI_RET_OK, "rrc_di_getlowcoverregister");
 
     // if status = 0 that means that a disk is inserted
@@ -81,7 +85,9 @@ check_cover_register:
             "Please insert Mario Kart Wii into the console,",
             "and select OK when done."};
 
+        RRC_LOGW("Mario Kart Wii is not inserted (or a different disc is) - asking the user");
         enum rrc_prompt_result pres = rrc_prompt_ok_cancel(xfb, lines, 4);
+        RRC_LOGI("insert disc prompt result: %d", pres);
         RRC_ASSERT(pres != RRC_PROMPT_RESULT_ERROR, "failed to generate prompt");
 
         if (pres == RRC_PROMPT_RESULT_OK)
@@ -99,9 +105,11 @@ check_cover_register:
     /* we need to check we actually inserted mario kart wii */
     struct rrc_di_disk_id did;
     res = rrc_di_get_disk_id(&did);
+    RRC_LOGI("DI_ReadDiscID first attempt: %d (%s)", res, res == RRC_DI_LIBDI_OK ? "OK" : res == RRC_DI_LIBDI_EIO ? "EIO" : "other");
     /* likely drive wasnt spun up */
     if (res != RRC_DI_LIBDI_EIO)
     {
+        RRC_LOGI("resetting / spinning up the drive (first read returned %d)", res);
         /* spin up the drive */
         rrc_dbg_printf("Spinning up the disc drive...\n");
         RRC_ASSERTEQ(rrc_di_reset(), RRC_DI_LIBDI_OK, "rrc_di_reset");
@@ -111,8 +119,12 @@ check_cover_register:
 
     /* this excludes region identifier */
 #define DISKID_MKW_ID "RMC"
+    RRC_LOGI("disc ID: %.4s (group %04x, disc %u, version %u)", did.game_id, did.group_id, did.disc_num, did.disc_ver);
     if (memcmp(did.game_id, DISKID_MKW_ID, strlen(DISKID_MKW_ID)))
+    {
+        RRC_LOGW("inserted disc is not Mario Kart Wii (%.4s)", did.game_id);
         goto missing_mkwii_alert;
+    }
 
     char gameId[16];
     snprintf(

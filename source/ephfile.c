@@ -21,6 +21,8 @@
 #include <gccore.h>
 
 #include "ephfile.h"
+#include "debuglog.h"
+#include "debugwrap.h"
 
 bool rrc_launched_from_rr()
 {

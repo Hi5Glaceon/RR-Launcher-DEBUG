@@ -21,11 +21,13 @@
 #include <string.h>
 #include <gctypes.h>
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 
 #include "update/update.h"
 #include "console.h"
 #include "util.h"
 #include "version.h"
+#include "debuglog.h"
 
 /* 100 = 100% */
 int rrc_con_progress_percent = 0;
@@ -63,6 +65,20 @@ void rrc_con_cursor_seek_to(int row, int column)
 
 void rrc_con_update(char *action, int progress_percent)
 {
+    /* DEBUG BUILD: log UI progress. Progress-only updates (downloads) are rate limited to one line every 2 seconds. */
+    {
+        static char last_prefix[24] = "";
+        static u64 last_log = 0;
+        u64 now = gettime();
+        bool changed = strncmp(last_prefix, action ? action : "", sizeof(last_prefix) - 1) != 0;
+        if (changed || diff_msec(last_log, now) >= 2000)
+        {
+            RRC_LOGD("screen: \"%s\" (%d%%)", action ? action : "", progress_percent);
+            snprintf(last_prefix, sizeof(last_prefix), "%s", action ? action : "");
+            last_log = now;
+        }
+    }
+
     rrc_con_set_action(action);
     rrc_con_set_progress_percent(progress_percent);
     rrc_con_print_state();
@@ -87,11 +103,23 @@ int rrc_con_centered_text_start_column(char *text)
     return (rrc_con_get_cols() / 2) - (strlen(text) / 2);
 }
 
+/* DEBUG BUILD: marker plus live warning/error counters in the bottom left corner. */
+void rrc_con_display_debug_badge()
+{
+    char dbgtext[32];
+    snprintf(dbgtext, sizeof(dbgtext), "DEBUG W:%d E:%d", rrc_log_warn_count(), rrc_log_error_count());
+    rrc_con_cursor_seek_to(rrc_con_get_rows() - 1, 0);
+    printf("%s%s" RRC_CON_ANSI_CLR, rrc_log_error_count() > 0 ? RRC_CON_ANSI_FG_BRIGHT_RED : (rrc_log_warn_count() > 0 ? RRC_CON_ANSI_FG_BRIGHT_YELLOW : RRC_CON_ANSI_FG_BRIGHT_GREEN), dbgtext);
+}
+
 void rrc_con_display_version()
 {
     if (cached_version.major == -1)
     {
+        RRC_LOGI("reading the installed version for the version display (first time)");
         struct rrc_result version_result = rrc_update_get_current_version(&cached_version);
+        if (rrc_result_is_error(version_result))
+            RRC_LOGE("could not read version.txt for the version display - this is fatal in the launcher");
         rrc_result_error_check_error_fatal(version_result);
     }
 
@@ -106,6 +134,8 @@ void rrc_con_display_version()
     char internal_vertext[32];
     struct rrc_version internal_version = RRC_INTERNAL_VERSION;
     snprintf(internal_vertext, sizeof(internal_vertext), "Channel: %i.%i.%i", internal_version.major, internal_version.minor, internal_version.patch);
+
+    rrc_con_display_debug_badge();
 
     rrc_con_cursor_seek_to(rrc_con_get_rows() - 2, rrc_con_get_cols() - strlen(vertext));
     printf("%s", vertext);

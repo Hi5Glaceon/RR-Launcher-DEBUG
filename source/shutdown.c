@@ -21,6 +21,7 @@
 
 #include "console.h"
 #include "time.h"
+#include "debuglog.h"
 
 #define RRC_SHUTDOWN_CHECK_TIME_MS 2500
 
@@ -54,6 +55,9 @@ void rrc_shutdown_check()
 
     if (_shutdown_state != -1 && time_since_trigger < RRC_SHUTDOWN_CHECK_TIME_MS)
     {
+        RRC_LOGI("%s button pressed - %s", _shutdown_state == SYS_POWEROFF ? "POWER" : "RESET",
+                 _shutdown_state == SYS_POWEROFF ? "powering off" : "returning to the Wii menu");
+        rrc_log_close("power/reset button");
         rrc_con_update("Shutting Down", 100);
         SYS_ResetSystem(_shutdown_state, 0, 0);
     }

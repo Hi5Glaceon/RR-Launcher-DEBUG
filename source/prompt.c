@@ -30,6 +30,15 @@
 #include "util.h"
 #include "gui.h"
 #include "pad.h"
+#include "debuglog.h"
+
+/* DEBUG BUILD: log the text of every prompt. */
+static void log_prompt(const char *kind, char **lines, int n, const char *opt1, const char *opt2)
+{
+    RRC_LOGI("prompt (%s) shown: [%s]%s%s%s", kind, opt1 ? opt1 : "", opt2 ? " [" : "", opt2 ? opt2 : "", opt2 ? "]" : "");
+    for (int i = 0; i < n; i++)
+        RRC_LOGI("  | %s", lines[i] ? lines[i] : "<NULL>");
+}
 
 #define _RRC_OPTIONS_W_PAD "         " /* 9 spaces between each option */
 #define _RRC_PROMPT_TEXT_FIRST_ROW 3
@@ -73,9 +82,11 @@ enum rrc_prompt_result rrc_prompt_2_options(
     enum rrc_prompt_result option2_result)
 {
     _rrc_prompt_xfb_setup();
+    log_prompt("2 options", lines, n, option1, option2);
 
     if (n > _RRC_PROMPT_LINES_MAX)
     {
+        RRC_LOGE("prompt NOT shown: %d lines, max is %d", n, _RRC_PROMPT_LINES_MAX);
         rrc_gui_display_con(old_xfb, false);
         return RRC_PROMPT_RESULT_ERROR;
     }
@@ -92,6 +103,7 @@ enum rrc_prompt_result rrc_prompt_2_options(
     {
         if (strlen(lines[i]) > cols)
         {
+            RRC_LOGE("prompt NOT shown: line %d is %d chars, console is %d wide", i, (int)strlen(lines[i]), cols);
             rrc_gui_display_con(old_xfb, false);
             return RRC_PROMPT_RESULT_ERROR;
         }
@@ -108,6 +120,7 @@ enum rrc_prompt_result rrc_prompt_2_options(
 
     if ((strlen(buttons) + strlen(arrow)) > cols)
     {
+        RRC_LOGE("prompt NOT shown: buttons too wide");
         rrc_gui_display_con(old_xfb, false);
         return RRC_PROMPT_RESULT_ERROR;
     }
@@ -158,6 +171,7 @@ enum rrc_prompt_result rrc_prompt_2_options(
         usleep(RRC_WPAD_LOOP_TIMEOUT);
     }
 
+    RRC_LOGI("prompt answered: %s", selected_option == option1_result ? option1 : option2);
     rrc_gui_display_con(old_xfb, false);
     return selected_option;
 }
@@ -178,9 +192,11 @@ void rrc_prompt_1_option(void *old_xfb,
                          char *button)
 {
     _rrc_prompt_xfb_setup();
+    log_prompt("1 option", lines, n, button, NULL);
 
     if (n > _RRC_PROMPT_LINES_MAX)
     {
+        RRC_LOGE("prompt NOT shown (the user never saw this message!): %d lines, max is %d", n, _RRC_PROMPT_LINES_MAX);
         rrc_gui_display_con(old_xfb, false);
         return;
     }
@@ -197,6 +213,7 @@ void rrc_prompt_1_option(void *old_xfb,
     {
         if (strlen(lines[i]) > cols)
         {
+            RRC_LOGE("prompt NOT shown (the user never saw this message!): line %d is %d chars, console is %d wide", i, (int)strlen(lines[i]), cols);
             rrc_gui_display_con(old_xfb, false);
             return;
         }
@@ -228,6 +245,7 @@ void rrc_prompt_1_option(void *old_xfb,
         usleep(RRC_WPAD_LOOP_TIMEOUT);
     }
 
+    RRC_LOGI("prompt dismissed with [%s]", button);
     rrc_gui_display_con(old_xfb, false);
     return;
 }

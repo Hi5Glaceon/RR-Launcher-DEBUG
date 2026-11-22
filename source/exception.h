@@ -23,7 +23,8 @@
 #include <gccore.h>
 
 /* amount of time to display exception screen before exiting */
-#define EXCEPTION_DISPLAY_TIME_SEC 10
+/* DEBUG BUILD: 30 instead of 10 seconds so the screen can be photographed */
+#define EXCEPTION_DISPLAY_TIME_SEC 30
 
 void init_exception_handlers();
 

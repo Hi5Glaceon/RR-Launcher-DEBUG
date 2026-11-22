@@ -20,6 +20,7 @@
 #include "versionutils.h"
 #include <string.h>
 #include <stdlib.h>
+#include "debuglog.h"
 
 bool rrc_version_is_older(const struct rrc_version *a, const struct rrc_version *b)
 {
@@ -56,6 +57,7 @@ struct rrc_result rrc_version_from_string(const char *version_str, struct rrc_ve
             if (sect_len == 0)
             {
                 /* ??? */
+                RRC_LOGW("cannot parse version string \"%s\" (empty part at position %d)", version_str, i);
                 return rrc_result_create_error_corrupted_versionfile("Invalid format");
             }
 

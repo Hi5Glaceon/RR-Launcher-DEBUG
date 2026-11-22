@@ -92,6 +92,7 @@ void rrc_con_print_text_centered(int row, char *text);
 int rrc_con_centered_text_start_column(char *text);
 
 void rrc_con_display_version();
+void rrc_con_display_debug_badge();
 
 void rrc_con_display_progress_bar();
 

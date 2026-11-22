@@ -26,6 +26,8 @@
 #include "../console.h"
 #include "../util.h"
 #include "versionsfile.h"
+#include "../debuglog.h"
+#include "../debugwrap.h"
 
 extern const unsigned char cacert_pem[];
 extern const unsigned char cacert_pem_end[];
@@ -81,6 +83,7 @@ size_t _rrc_versionsfile_write_callback(char *ptr, size_t size, size_t nmemb, vo
     if (s->ptr == NULL)
     {
         // TODO: maybe make a proper place to put error info?
+        RRC_LOGE("realloc(%u) failed while receiving data", (unsigned)(new_len + 1));
         printf("realloc failed!");
         return -1;
     }
@@ -110,6 +113,7 @@ int rrc_versionsfile_get_versionsfile(char **result)
     if (curl)
     {
         _rrc_curl_ssl_setup(curl);
+        RRC_LOGI("fetching versions file " _RRC_VERSIONSFILE_URL);
         curl_easy_setopt(curl, CURLOPT_URL, _RRC_VERSIONSFILE_URL);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
@@ -123,6 +127,7 @@ int rrc_versionsfile_get_versionsfile(char **result)
         if (res != CURLE_OK)
         {
             // TODO: report error better
+            RRC_LOGE("fetching the versions file failed: CURLcode %d (%s)", (int)res, curl_easy_strerror(res));
             return -res;
         }
 
@@ -154,6 +159,7 @@ int rrc_versionsfile_get_removed_files(char **result)
     if (curl)
     {
         _rrc_curl_ssl_setup(curl);
+        RRC_LOGI("fetching deleted-files list " _RRC_VERSIONS_FILE_REMOVED_URL);
         curl_easy_setopt(curl, CURLOPT_URL, _RRC_VERSIONS_FILE_REMOVED_URL);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
@@ -165,6 +171,7 @@ int rrc_versionsfile_get_removed_files(char **result)
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK)
         {
+            RRC_LOGE("fetching the deleted-files list failed: CURLcode %d (%s)", (int)res, curl_easy_strerror(res));
             // TODO: report error better
             printf("curl_easy_perform() failed: %s\n",
                    curl_easy_strerror(res));
@@ -207,6 +214,13 @@ int rrc_versionsfile_split_by(char *in, char by, char ***out, int *amt)
             /* copy from offset to new array */
             memcpy(this, in + start_idx, current_len);
             this[current_len] = '\0';
+            if (count == _RRC_SPLIT_LIM / (int)sizeof(char *))
+            {
+                RRC_LOGE("BUG: split produces more than %d entries, but the pointer array only has room for %d "
+                         "(malloc(_RRC_SPLIT_LIM) bytes, not entries) - HEAP OVERFLOW follows, expect memory corruption",
+                         (int)(_RRC_SPLIT_LIM / sizeof(char *)), (int)(_RRC_SPLIT_LIM / sizeof(char *)));
+                rrc_log_sync();
+            }
             (*out)[count] = this;
 
             start_idx = i + 1;
@@ -257,8 +271,9 @@ struct rrc_result rrc_versionsfile_get_necessary_urls_and_versions(char *version
     *versions = malloc(_RRC_SPLIT_LIM * sizeof(struct rrc_version));
 
     char **lines;
-    int count;
+    int count = 0;
     int res = rrc_versionsfile_split_by(versionsfile, '\n', &lines, &count);
+    RRC_LOGI("versions file split into %d lines (res %d)", count, res);
     if (res < 0)
     {
         return rrc_result_create_error_corrupted_versionfile("Failed to split versionfile");
@@ -287,14 +302,21 @@ struct rrc_result rrc_versionsfile_get_necessary_urls_and_versions(char *version
             return rrc_result_create_error_corrupted_versionfile("Failed to split versionfile");
         }
 
+        if (num_parts < 2)
+            RRC_LOGE("versions file line %d (\"%s\") has %d part(s) - no URL; parts[1] is uninitialised memory", i + 1, line, num_parts);
+
         struct rrc_version verint;
         struct rrc_result verstring_res = rrc_version_from_string(parts[0], &verint);
 
         if (rrc_result_is_error(verstring_res))
         {
+            RRC_LOGE("versions file line %d: cannot parse version \"%s\"", i + 1, parts[0]);
             rrc_versionsfile_free_split(lines, count);
             return verstring_res;
         }
+        RRC_LOGD("versions file line %d: %d.%d.%d %s -> %s", i + 1, verint.major, verint.minor, verint.patch,
+                 num_parts >= 2 ? parts[1] : "<none>",
+                 rrc_version_is_older(current_version, &verint) ? "NEEDED" : "already installed");
 
         // if the version is newer than our current version, we need to update to it
         if (rrc_version_is_older(current_version, &verint))
@@ -329,8 +351,9 @@ struct rrc_result rrc_versionsfile_parse_deleted_files(char *input, struct rrc_v
     int output_idx = 0;
 
     char **lines;
-    int count;
+    int count = 0;
     int res = rrc_versionsfile_split_by(input, '\n', &lines, &count);
+    RRC_LOGI("deleted-files list split into %d lines (res %d)", count, res);
     if (res < 0)
     {
         return rrc_result_create_error_corrupted_versionfile("Failed to split deleted versionfile");
@@ -351,11 +374,15 @@ struct rrc_result rrc_versionsfile_parse_deleted_files(char *input, struct rrc_v
             return rrc_result_create_error_corrupted_versionfile("Failed to split deleted versionfile");
         }
 
+        if (parts_count < 2)
+            RRC_LOGE("deleted-files line %d (\"%s\") has %d part(s) - no path; parts[1] is uninitialised memory", i + 1, lines[i], parts_count);
+
         struct rrc_version verint;
         struct rrc_result verstring_res = rrc_version_from_string(parts[0], &verint);
 
         if (rrc_result_is_error(verstring_res))
         {
+            RRC_LOGE("deleted-files line %d: cannot parse version \"%s\"", i + 1, parts[0]);
             rrc_versionsfile_free_split(lines, count);
             return verstring_res;
         }

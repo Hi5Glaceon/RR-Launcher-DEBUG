@@ -32,6 +32,17 @@
 #include "string.h"
 #include "di.h"
 #include "util.h"
+#include "debuglog.h"
+
+/* DEBUG BUILD: logs the DI error code after a failed DI call. */
+static void log_di_failure(const char *what, int status, u32 offset, u32 size)
+{
+    uint32_t dierr = 0;
+    int r = DI_GetError(&dierr);
+    RRC_LOGE("%s FAILED: status %d, offset 0x%llx, size %u - DI_GetError()=%d, drive error 0x%08x",
+             what, status, (unsigned long long)offset << 2, (unsigned)size, r, (unsigned)dierr);
+    rrc_log_sync();
+}
 
 int rrc_di_getfd()
 {
@@ -42,6 +53,7 @@ int rrc_di_getfd()
 int rrc_di_init()
 {
     int fd = (int)IOS_Open("/dev/di", 0);
+    RRC_LOGI("IOS_Open(\"/dev/di\", 0) = %d", fd);
 
     di_fd = fd;
     return fd;
@@ -49,7 +61,9 @@ int rrc_di_init()
 
 int rrc_di_reset()
 {
-    return DI_Reset();
+    int r = DI_Reset();
+    RRC_LOGI("DI_Reset() = %d", r);
+    return r;
 }
 
 int rrc_di_get_low_cover_register(unsigned int *status)
@@ -70,6 +84,7 @@ int rrc_di_get_disk_id(struct rrc_di_disk_id *diskid)
 {
     uint64_t idr;
     int resdid = DI_ReadDiscID(&idr);
+    RRC_LOGD("DI_ReadDiscID() = %d", resdid);
 
     if (resdid == RRC_DI_LIBDI_OK)
     {
@@ -99,7 +114,12 @@ int rrc_di_unencrypted_read(void *buf, u32 size, u32 offset)
     int status = DI_UnencryptedRead(buf, size, offset);
     if (status != RRC_DI_LIBDI_OK)
     {
+        log_di_failure("DI_UnencryptedRead", status, offset, size);
         memset(buf, 0, size);
+    }
+    else
+    {
+        RRC_LOGD("DI_UnencryptedRead(offset 0x%llx, %u bytes) OK", (unsigned long long)offset << 2, (unsigned)size);
     }
     return status;
 }
@@ -109,12 +129,22 @@ int rrc_di_read(void *buf, u32 size, u32 offset)
     int status = DI_Read(buf, size, offset);
     if (status != RRC_DI_LIBDI_OK)
     {
+        log_di_failure("DI_Read", status, offset, size);
         memset(buf, 0, size);
+    }
+    else
+    {
+        RRC_LOGD("DI_Read(offset 0x%llx, %u bytes -> %p) OK", (unsigned long long)offset << 2, (unsigned)size, buf);
     }
     return status;
 }
 
 int rrc_di_open_partition(u32 offset)
 {
-    return DI_OpenPartition(offset);
+    int r = DI_OpenPartition(offset);
+    if (r != RRC_DI_LIBDI_OK)
+        log_di_failure("DI_OpenPartition", r, offset, 0);
+    else
+        RRC_LOGI("DI_OpenPartition(0x%llx) OK", (unsigned long long)offset << 2);
+    return r;
 }

@@ -39,6 +39,7 @@
 #include "console.h"
 #include "gui.h"
 #include "time.h"
+#include "debuglog.h"
 
 extern char exception_catch_start, exception_catch_end;
 
@@ -95,6 +96,14 @@ void _handle_exception(int exception)
 
     x = (u32 *)0x80003500;
 
+    /* DEBUG BUILD: backtrace on screen (resolve with powerpc-eabi-addr2line against the .elf) */
+    {
+        u32 *regs = (u32 *)0x80003500;
+        char bt[48]; /* only the first few frames fit on screen; the full backtrace is in the log */
+        rrc_log_format_backtrace(regs[1], regs[32 + 2], bt, sizeof(bt));
+        printf(RRC_CON_ANSI_FG_BRIGHT_YELLOW "PC %08x  BT: %s\n" RRC_CON_ANSI_FG_WHITE, (unsigned)regs[32 + 4], bt);
+    }
+
     printf(RRC_CON_ANSI_FG_BRIGHT_WHITE "\n R0..R7    R8..R15  R16..R23  R24..R31\n");
     for (i = 0; i < 8; i++)
     {
@@ -109,6 +118,10 @@ void _handle_exception(int exception)
         printf(RRC_CON_ANSI_FG_WHITE "%08x  %08x  %08x  %08x\n", x[0], x[2], x[4], x[6]);
         x++;
     }
+
+    /* DEBUG BUILD: keep the crash details in the log buffer. They are NOT written to the SD card:
+       its driver needs interrupts, which cannot be used inside an exception handler. */
+    rrc_log_exception(exception, type, (u32 *)0x80003500);
 
     rrc_usleep(EXCEPTION_DISPLAY_TIME_SEC * 1000 * 1000);
 

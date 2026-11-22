@@ -42,6 +42,8 @@
 #include "../settingsfile.h"
 #include "../versionutils.h"
 #include <bitflags.h>
+#include "../debuglog.h"
+#include "../debugwrap.h"
 
 bool rrc_signature_written()
 {
@@ -117,6 +119,8 @@ static void patch_dvd_functions(struct rrc_dol *dol, char region)
         memcpy(hooked_addr + 4, entry.backjmp_to_original, 16);
         rrc_invalidate_cache(hooked_addr, 32);
 
+        RRC_LOGD("DVD hook %d: game function %x (section %u, staging %p) -> trampoline %p", i, (unsigned)entry.addr, (unsigned)section_index, virt_addr, (void *)hooked_addr);
+
         // Overwrite the original function with a jump to the custom DVD function.
         memcpy(virt_addr, entry.jmp_to_custom, 16);
         rrc_invalidate_cache(virt_addr, 16);
@@ -155,12 +159,19 @@ void rrc_loader_load(struct rrc_dol *dol, struct rrc_settingsfile *settings, voi
 
     // runtime-ext needs to be loaded before parsing riivo patches, as it writes to a static.
     // All errors that happen here are fatal; we can't boot the game without knowing the patches or having the patched DVD functions.
+    RRC_LOG_STEP("Load runtime extensions");
+    RRC_LOGI("loader: dol=%p bi2=%p mem1_hi=%x mem2_hi=%x region '%c'", (void *)dol, bi2_dest, (unsigned)mem1_hi, (unsigned)mem2_hi, region);
     rrc_con_update("Load Runtime Extensions", 70);
     rrc_binary_load_runtime_ext(region);
 
     struct rrc_version *runtime_ext_internal_version = (struct rrc_version *)RRC_RUNTIME_EXT_INTERNAL_VERSION;
+    struct rrc_version channel_version = RRC_INTERNAL_VERSION;
+    RRC_LOGI("runtime-ext version %d.%d.%d, channel version %d.%d.%d",
+             runtime_ext_internal_version->major, runtime_ext_internal_version->minor, runtime_ext_internal_version->patch,
+             channel_version.major, channel_version.minor, channel_version.patch);
     if (!rrc_version_equals(runtime_ext_internal_version, &RRC_INTERNAL_VERSION))
     {
+        RRC_LOGE("runtime-ext in /" RRC_RETRO_REWIND_CHANNEL_DIR " does not belong to this boot.dol (mixed versions installed?)");
         struct rrc_result err = rrc_result_create_error_version_mismatch("runtime-ext version does not match channel\n"
                                                                          "version!\n\n"
                                                                          "Consider manually updating the channel at this time,\n"
@@ -170,19 +181,31 @@ void rrc_loader_load(struct rrc_dol *dol, struct rrc_settingsfile *settings, voi
         return;
     }
 
+    RRC_LOG_STEP("Load patch information");
     rrc_con_update("Load Patch Information", 80);
     struct parse_riivo_output riivo_out;
     res = rrc_riivo_patch_loader_parse(settings, &mem1_hi, &mem2_hi, dol, &riivo_out);
     rrc_result_error_check_error_fatal(res);
 
+    RRC_LOG_STEP("Patch DVD functions");
     rrc_con_update("Patch DVD Functions", 85);
     patch_dvd_functions(dol, region);
     res = rrc_binary_load_pulsar_loader(dol, riivo_out.loader_pul_dest);
     rrc_result_error_check_error_fatal(res);
 
+    RRC_LOGI("applying video fix for region '%c'", region);
     rrc_gui_video_fix(region);
 
+    RRC_LOG_STEP("Final preparations - handing over to the game");
     rrc_con_update("Final Preparations", 90);
+    RRC_LOGI("game entry point %x, %d memory patches, settings: my_stuff=%u separate_savegame=%u",
+             (unsigned)dol->entry_point, riivo_out.mem_patches_count, (unsigned)settings->my_stuff, (unsigned)settings->separate_savegame);
+    rrc_log_memory_state("before launch");
+    RRC_LOGI("the log ends here; problems inside the game itself are not recorded by the launcher "
+             "(see sd:/" RRC_RETRO_REWIND_BASE_DIR "/Crash.pul after a game crash)");
+    // DEBUG BUILD: the SD card / IOS is shut down next, so close the log now.
+    rrc_log_close("launching the game");
+
     wiisocket_deinit();
 
     __IOS_ShutdownSubsystems();

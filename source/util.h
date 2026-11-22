@@ -26,6 +26,7 @@
 #include <gctypes.h>
 
 #include "console.h"
+#include "debuglog.h"
 
 /*
     When this directive is defined and set to a value greater than 0,
@@ -50,12 +51,12 @@
 #define RRC_LWP_PRIO_IDLE 0
 #define RRC_LWP_OK 0
 
-#define RRC_FATAL(...)          \
-    do                          \
-    {                           \
-        printf(__VA_ARGS__);    \
-        usleep(RRC_EXIT_DELAY); \
-        exit(1);                \
+/* DEBUG BUILD: logs the message with its source location, shows a detailed fatal screen
+   (including recent log lines) for RRC_LOG_FATAL_SCREEN_SEC seconds and exits. */
+#define RRC_FATAL(...)                                                \
+    do                                                                \
+    {                                                                 \
+        rrc_log_fatal(__FILE__, __LINE__, __func__, __VA_ARGS__);     \
     } while (0);
 
 #define RRC_ASSERT(condition, what)                                        \
@@ -69,15 +70,19 @@
         }                                                                  \
     } while (0);
 
-#define RRC_ASSERTEQ(lhs, rhs, what)                                                         \
-    do                                                                                       \
-    {                                                                                        \
-        int st = lhs == rhs;                                                                 \
-        char *st_str = _RRC_STRING(lhs) " == " _RRC_STRING(rhs);                             \
-        if (!st)                                                                             \
-        {                                                                                    \
-            RRC_FATAL("%s: assert failed: %s (lhs = %i, rhs = %i)", what, st_str, lhs, rhs); \
-        }                                                                                    \
+/* DEBUG BUILD: lhs/rhs are evaluated exactly once. (The original macro evaluated `lhs' a second time
+   for the error message, i.e. e.g. IOS_ReloadIOS() would have been called again on failure and the
+   printed value was the result of that second call.) */
+#define RRC_ASSERTEQ(lhs, rhs, what)                                                                    \
+    do                                                                                                  \
+    {                                                                                                   \
+        int _rrc_lhs = (lhs);                                                                           \
+        int _rrc_rhs = (rhs);                                                                           \
+        char *st_str = _RRC_STRING(lhs) " == " _RRC_STRING(rhs);                                        \
+        if (_rrc_lhs != _rrc_rhs)                                                                       \
+        {                                                                                               \
+            RRC_FATAL("%s: assert failed: %s (lhs = %i, rhs = %i)", what, st_str, _rrc_lhs, _rrc_rhs); \
+        }                                                                                               \
     } while (0);
 
 #define RRC_STRINGIFY(x) #x
@@ -88,6 +93,7 @@
 #define rrc_dbg_printf(...)                                        \
     do                                                             \
     {                                                              \
+        RRC_LOGD(__VA_ARGS__);                                     \
         rrc_con_clear_line(_RRC_PRINTF_ROW);                       \
         rrc_con_clear_line(_RRC_PRINTF_ROW + 1);                   \
         rrc_con_cursor_seek_to(_RRC_PRINTF_ROW, RRC_CON_EDGE_PAD); \
@@ -95,9 +101,13 @@
     } while (0);
 
 #else
-/* define stubs */
+/* DEBUG BUILD: the existing debug prints always go to the log file (not to the screen). */
 
-#define rrc_dbg_printf(...)
+#define rrc_dbg_printf(...)  \
+    do                       \
+    {                        \
+        RRC_LOGD(__VA_ARGS__); \
+    } while (0);
 
 #endif
 
