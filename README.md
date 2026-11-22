@@ -15,6 +15,27 @@ The debug build is the regular launcher with extra logging and extra error outpu
 - The crash screen shows a backtrace.
 - The text area is larger (62x18 characters).
 
+### Download and install
+
+Prebuilt files are on the [Releases](../../releases) page of this repository. Every release names the exact commit it was built from.
+
+This works for the version of the channel that runs from the Homebrew Channel (`/apps/RetroRewind/boot.dol`). An installed WAD channel is not affected by this.
+
+1. Make a copy of your current `/apps/RetroRewind/boot.dol` on the SD card, for example as `boot.dol.bak`.
+2. Copy `RR-Launcher-https-DEBUG.dol` from the release to `/apps/RetroRewind/boot.dol` (this means renaming it to `boot.dol`).
+3. Check that `/RetroRewindChannel` contains the `runtime-ext-*.dol` files of the regular channel. The debug build uses the same ones.
+4. Start the channel as usual. The log is written to `sd:/RR_debug.log`.
+
+To go back to the normal channel, put your copy of `boot.dol` back.
+
+### Reporting a problem
+
+When you report a problem, please attach `RR_debug.log` (see the privacy note below) and, if the launcher crashed, a photo of the exception screen. Say which console or emulator you use. The `.elf` file of the release is only needed to resolve the backtrace and does not have to be sent.
+
+### Based on
+
+This is an unofficial build of the `https` branch of [Jacherr/RR-Launcher](https://github.com/Jacherr/RR-Launcher) (based on commit `2e55b4e`), with extra logging added. It is not an official release.
+
 ### Building the debug build
 
 Build it with `./build.sh` instead of `make` (arguments such as `clean` are passed on). The script only adds a linker flag that is needed with libogc 3.x. See [DEBUG-BUILD.md](./DEBUG-BUILD.md) for all details and for the list of changed files. The general requirements (DevkitPro, libcurl) are listed under *Building* in the description of the regular launcher below.
@@ -43,7 +64,7 @@ If the launcher crashes, the exception screen shows the registers and a short ba
 To turn the backtrace into function names and source lines, use the `.elf` file from the same build. A backtrace lists return addresses, so subtract 4 from each address to get the call itself:
 
 ```
-powerpc-eabi-addr2line -f -C -e RR-Launcher-https.elf 80015ae4 8001472c 80004fc0
+powerpc-eabi-addr2line -f -C -e RR-Launcher-https-DEBUG.elf 80015bb4 800147fc 80004fc0
 ```
 
 ### Example: an HTML page instead of the versions file
@@ -72,7 +93,7 @@ rrc_update_do_updates                             source/update/update.c:679
 main                                              source/main.c:304
 ```
 
-A line without a space has only one part, so `parts[1]` is never set, but the code frees it. What happens depends on what was in that memory before: on the exception screen above, `DAR` is `614d3470` and `R4` is `614d3474`, the freed pointer and the address of its block header. Emulators hand out zeroed memory, so the bug often stays hidden there.
+A line without a space has only one part, so `parts[1]` is never set, but the code frees it. What happens depends on what was in that memory before: on the exception screen above, `R4` is `614d3474`, the pointer that was freed, and `DAR` is `614d3470`, the address of its block header (pointer minus 4), which is where the invalid access happened. Emulators hand out zeroed memory, so the bug often stays hidden there.
 
 
 ---
