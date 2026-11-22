@@ -43,7 +43,7 @@ If the launcher crashes, the exception screen shows the registers and a short ba
 To turn the backtrace into function names and source lines, use the `.elf` file from the same build. A backtrace lists return addresses, so subtract 4 from each address to get the call itself:
 
 ```
-powerpc-eabi-addr2line -f -C -e RR-Launcher-https.elf 80015bb4 800147fc 80004fc0
+powerpc-eabi-addr2line -f -C -e RR-Launcher-https.elf 80015ae4 8001472c 80004fc0
 ```
 
 ### Example: an HTML page instead of the versions file
@@ -72,7 +72,7 @@ rrc_update_do_updates                             source/update/update.c:679
 main                                              source/main.c:304
 ```
 
-A line without a space has only one part, so `parts[1]` is never set, but the code frees it. What happens depends on what was in that memory before: on the exception screen above, `R4` is `614d3474`, the pointer that was freed, and `DAR` is `614d3470`, the address of its block header (pointer minus 4), which is where the invalid access happened. Emulators hand out zeroed memory, so the bug often stays hidden there.
+A line without a space has only one part, so `parts[1]` is never set, but the code frees it. What happens depends on what was in that memory before: on the exception screen above, `DAR` is `614d3470` and `R4` is `614d3474`, the freed pointer and the address of its block header. Emulators hand out zeroed memory, so the bug often stays hidden there.
 
 
 ---
